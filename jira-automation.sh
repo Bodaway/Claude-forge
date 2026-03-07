@@ -7,7 +7,7 @@
 #
 # Requirements:
 #   - claude CLI installed (Claude Code)
-#   - .mcp.json in the repo root with Jira and Azure DevOps MCP servers configured
+#   - Jira and Azure DevOps MCP servers configured in user settings (~/.claude.json)
 #   - Must be run from within the target git repository
 
 set -euo pipefail
@@ -28,11 +28,12 @@ if ! git rev-parse --git-dir > /dev/null 2>&1; then
 fi
 
 REPO_ROOT=$(git rev-parse --show-toplevel)
-MCP_CONFIG="$REPO_ROOT/.mcp.json"
 
-if [ ! -f "$MCP_CONFIG" ]; then
-    echo "Error: .mcp.json not found at $MCP_CONFIG"
-    echo "Please add an .mcp.json file with your Jira and Azure DevOps MCP server configurations."
+# Verify user-level MCP config exists with required servers
+GLOBAL_MCP_CONFIG="${HOME}/.claude.json"
+if [ ! -f "$GLOBAL_MCP_CONFIG" ]; then
+    echo "Error: User Claude config not found at $GLOBAL_MCP_CONFIG"
+    echo "Please configure Jira and Azure DevOps MCP servers via: claude mcp add"
     exit 1
 fi
 
@@ -48,7 +49,7 @@ echo " Jira Automation Script"
 echo "=========================================="
 echo " Ticket  : $JIRA_TICKET"
 echo " Repo    : $REPO_ROOT"
-echo " MCP cfg : $MCP_CONFIG"
+echo " MCP cfg : $GLOBAL_MCP_CONFIG (user settings)"
 echo "=========================================="
 echo ""
 
@@ -175,7 +176,6 @@ echo ""
 
 claude \
     --dangerouslySkipPermissions \
-    --mcp-config "$MCP_CONFIG" \
     -p "$PROMPT"
 
 echo ""
