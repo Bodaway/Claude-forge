@@ -2,9 +2,21 @@
 # git-jira-analysis.sh
 # Analyses consistency between Jira ticket statuses and Git/Azure DevOps PR states
 #
-# Usage: ./git-jira-analysis.sh <JIRA-PROJECT-KEY> [--sprint <sprint-name>] [--tickets TICKET-1,TICKET-2,...]
+# Usage: ./git-jira-analysis.sh <JIRA-PROJECT-KEY> [options]
 # Example: ./git-jira-analysis.sh PROJ
-# Example: ./git-jira-analysis.sh PROJ --tickets PROJ-101,PROJ-102,PROJ-103
+# Example: ./git-jira-analysis.sh PROJ --tickets PROJ-101,PROJ-102 --output report.md
+#
+# Options:
+#   --sprint <name>         Filter by sprint name
+#   --tickets <ID1,ID2,...> Analyse specific tickets only
+#   --output <file>         Save report to file (in addition to stdout)
+#   --json                  Output structured JSON instead of markdown
+#   --verbose               Show progress during analysis
+#
+# Exit codes:
+#   0  All tickets are consistent (no violations, no warnings)
+#   1  Violations found (blocking inconsistencies)
+#   2  Warnings found (non-blocking, but no violations)
 #
 # Requirements:
 #   - claude CLI installed (Claude Code)
@@ -17,14 +29,25 @@ set -euo pipefail
 PROJECT_KEY="${1:-}"
 SPRINT_NAME=""
 TICKETS=""
+OUTPUT_FILE=""
+JSON_OUTPUT=false
+VERBOSE=false
 
 if [ -z "$PROJECT_KEY" ]; then
-    echo "Usage: $0 <JIRA-PROJECT-KEY> [--sprint <sprint-name>] [--tickets TICKET-1,TICKET-2,...]"
+    echo "Usage: $0 <JIRA-PROJECT-KEY> [--sprint <name>] [--tickets ID1,ID2,...] [--output <file>] [--json] [--verbose]"
     echo ""
     echo "Examples:"
-    echo "  $0 PROJ                                    # All active tickets in project"
-    echo "  $0 PROJ --sprint 'Sprint 42'               # Tickets in a specific sprint"
-    echo "  $0 PROJ --tickets PROJ-101,PROJ-102        # Specific tickets only"
+    echo "  $0 PROJ                                        # All active tickets in project"
+    echo "  $0 PROJ --sprint 'Sprint 42'                   # Tickets in a specific sprint"
+    echo "  $0 PROJ --tickets PROJ-101,PROJ-102            # Specific tickets only"
+    echo "  $0 PROJ --output report.md                     # Save report to file"
+    echo "  $0 PROJ --json                                 # JSON output for CI pipelines"
+    echo "  $0 PROJ --verbose                              # Show progress"
+    echo ""
+    echo "Exit codes:"
+    echo "  0  No issues found"
+    echo "  1  Violations found (blocking)"
+    echo "  2  Warnings only (non-blocking)"
     exit 1
 fi
 
@@ -47,6 +70,22 @@ while [[ $# -gt 0 ]]; do
             fi
             shift 2
             ;;
+        --output)
+            OUTPUT_FILE="${2:-}"
+            if [ -z "$OUTPUT_FILE" ]; then
+                echo "Error: --output requires a file path"
+                exit 1
+            fi
+            shift 2
+            ;;
+        --json)
+            JSON_OUTPUT=true
+            shift
+            ;;
+        --verbose)
+            VERBOSE=true
+            shift
+            ;;
         *)
             echo "Unknown option: $1"
             exit 1
@@ -54,25 +93,8 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-# ── Precondition checks ─────────────────────────────────────────────────────────
-if ! git rev-parse --git-dir > /dev/null 2>&1; then
-    echo "Error: Must be run from within a git repository."
-    exit 1
-fi
-
-REPO_ROOT=$(git rev-parse --show-toplevel)
-
-GLOBAL_MCP_CONFIG="${HOME}/.claude.json"
-if [ ! -f "$GLOBAL_MCP_CONFIG" ]; then
-    echo "Error: User Claude config not found at $GLOBAL_MCP_CONFIG"
-    echo "Please configure Jira and Azure DevOps MCP servers via: claude mcp add"
-    exit 1
-fi
-
-if ! command -v claude &> /dev/null; then
-    echo "Error: 'claude' CLI not found. Please install Claude Code."
-    exit 1
-fi
+# ── Precondition checks (shared) ────────────────────────────────────────────────
+source "$(dirname "$0")/lib/preconditions.sh"
 
 # ── Build ticket filter clause ──────────────────────────────────────────────────
 TICKET_FILTER=""
@@ -84,16 +106,43 @@ else
     TICKET_FILTER="Analyse all tickets in project ${PROJECT_KEY} that are NOT in terminal states (13. ABANDONNÉ or 14. CLOS)."
 fi
 
+# ── Build output format instructions ────────────────────────────────────────────
+OUTPUT_FORMAT_EXTRA=""
+if [ "$JSON_OUTPUT" = true ]; then
+    OUTPUT_FORMAT_EXTRA="
+IMPORTANT: Output the report as a single valid JSON object (no markdown, no code fences) with this structure:
+{
+  \"summary\": { \"total\": N, \"violations\": N, \"warnings\": N },
+  \"violations\": [ { \"ticket\": \"ID\", \"status\": \"...\", \"rule\": N, \"description\": \"...\" } ],
+  \"warnings\": [ { \"ticket\": \"ID\", \"status\": \"...\", \"rule\": N, \"description\": \"...\" } ],
+  \"info\": [ { \"ticket\": \"ID\", \"status\": \"...\", \"description\": \"...\" } ],
+  \"clean\": [ \"ID1\", \"ID2\" ]
+}
+"
+fi
+
+VERBOSE_INSTRUCTIONS=""
+if [ "$VERBOSE" = true ]; then
+    VERBOSE_INSTRUCTIONS="
+Before each step, print a short progress line to stderr prefixed with [PROGRESS], e.g.:
+[PROGRESS] Fetching Jira tickets for project PROJ...
+[PROGRESS] Found 24 tickets. Fetching Azure DevOps PRs...
+[PROGRESS] Checking ticket PROJ-101 (status: EN COURS)...
+"
+fi
+
 # ── Info banner ─────────────────────────────────────────────────────────────────
-echo "=========================================="
-echo " Git ↔ Jira Consistency Analysis"
-echo "=========================================="
-echo " Project : $PROJECT_KEY"
-[ -n "$SPRINT_NAME" ] && echo " Sprint  : $SPRINT_NAME"
-[ -n "$TICKETS" ]     && echo " Tickets : $TICKETS"
-echo " Repo    : $REPO_ROOT"
-echo "=========================================="
-echo ""
+echo "==========================================" >&2
+echo " Git ↔ Jira Consistency Analysis" >&2
+echo "==========================================" >&2
+echo " Project : $PROJECT_KEY" >&2
+[ -n "$SPRINT_NAME" ] && echo " Sprint  : $SPRINT_NAME" >&2
+[ -n "$TICKETS" ]     && echo " Tickets : $TICKETS" >&2
+echo " Repo    : $REPO_ROOT" >&2
+[ -n "$OUTPUT_FILE" ] && echo " Output  : $OUTPUT_FILE" >&2
+[ "$JSON_OUTPUT" = true ] && echo " Format  : JSON" >&2
+echo "==========================================" >&2
+echo "" >&2
 
 # ── Build Claude prompt ─────────────────────────────────────────────────────────
 PROMPT=$(cat <<'CLAUDE_PROMPT_HEADER'
@@ -139,7 +188,7 @@ If the ticket is in status **4 (EN COURS)**, **5 (A TESTER EN INTERNE)**, or **9
 - There MUST be at least one open (not merged, not abandoned) Pull Request in Azure DevOps whose branch name or title references this ticket ID.
 - **Violation:** "Ticket {ID} is in status '{status}' but no open PR was found."
 
-### Rule 2 — Post-staging statuses (7, 8, 9, 10.1, 10.2): PR must be MERGED
+### Rule 2 — Post-staging statuses (7, 8, 10.1, 10.2): PR must be MERGED
 If the ticket is in status **7 (A RECETTER)**, **8 (A RECETTER S)**, **10.1 (A DÉPLOYER EN PRODUCTION)**, or **10.2 (A DÉPLOYER EN PRODUCTION AVEC RÉ...)**:
 - There MUST be at least one merged/completed Pull Request in Azure DevOps referencing this ticket ID.
 - **Violation:** "Ticket {ID} is in status '{status}' but no merged PR was found."
@@ -165,6 +214,12 @@ If the ticket is in status **13 (ABANDONNÉ)** or **14 (CLOS)**:
 If the ticket is in **12.1 (BLOQUÉ)** or **12.2 (EN PAUSE)**:
 - Flag these for visibility but do not raise violations.
 - **Info:** "Ticket {ID} is {BLOQUÉ/EN PAUSE} — review if this is still accurate."
+
+### Rule 7 — Deploy to staging (6): transitional, no strict rule
+If the ticket is in status **6 (A DÉPLOYER EN RECETTE)**:
+- This is a transitional status. The PR may be open or recently merged.
+- Do NOT raise a violation. Only raise a **Warning** if there is no PR at all (neither open nor merged):
+  "Ticket {ID} is in A DÉPLOYER EN RECETTE but no PR (open or merged) was found."
 
 ---
 
@@ -193,13 +248,21 @@ For each warning:
 ### 5. Clean tickets
 - List of tickets where everything is consistent (just the IDs, one line)
 
+At the very end of your output, on its own line, print exactly one of these tags (no other text on that line):
+- **[EXIT:0]** if there are zero violations AND zero warnings
+- **[EXIT:1]** if there is at least one violation
+- **[EXIT:2]** if there are warnings but zero violations
+
 ---
 
 CLAUDE_PROMPT_HEADER
 )
 
-# Append the dynamic part
+# Append the dynamic part (needs variable expansion)
 PROMPT="${PROMPT}
+${OUTPUT_FORMAT_EXTRA}
+${VERBOSE_INSTRUCTIONS}
+
 ## Your Task
 
 Project key: **${PROJECT_KEY}**
@@ -227,6 +290,7 @@ For each Jira ticket collected in Step 1:
 
 Output the structured report as described in the Output Format section above.
 Use markdown formatting. Be precise and factual — only report actual findings.
+Remember to include the [EXIT:N] tag on the last line.
 
 ---
 
@@ -234,14 +298,35 @@ Work methodically. Do not skip any step.
 "
 
 # ── Invoke Claude ────────────────────────────────────────────────────────────────
-echo "Starting consistency analysis..."
-echo ""
+echo "Starting consistency analysis..." >&2
+echo "" >&2
 
-claude \
+# Capture output to parse exit tag and optionally save to file
+CLAUDE_OUTPUT=$(claude \
     --dangerouslySkipPermissions \
-    -p "$PROMPT"
+    -p "$PROMPT" 2>&2)
 
-echo ""
-echo "=========================================="
-echo " Analysis complete for: $PROJECT_KEY"
-echo "=========================================="
+# Display the report
+echo "$CLAUDE_OUTPUT"
+
+# Save to file if requested
+if [ -n "$OUTPUT_FILE" ]; then
+    echo "$CLAUDE_OUTPUT" > "$OUTPUT_FILE"
+    echo "" >&2
+    echo "Report saved to: $OUTPUT_FILE" >&2
+fi
+
+echo "" >&2
+echo "==========================================" >&2
+echo " Analysis complete for: $PROJECT_KEY" >&2
+echo "==========================================" >&2
+
+# ── Parse exit code from Claude output ──────────────────────────────────────────
+EXIT_CODE=0
+if echo "$CLAUDE_OUTPUT" | grep -q '\[EXIT:1\]'; then
+    EXIT_CODE=1
+elif echo "$CLAUDE_OUTPUT" | grep -q '\[EXIT:2\]'; then
+    EXIT_CODE=2
+fi
+
+exit "$EXIT_CODE"
