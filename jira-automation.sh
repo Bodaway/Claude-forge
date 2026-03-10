@@ -12,6 +12,9 @@
 
 set -euo pipefail
 
+# ── Configuration ───────────────────────────────────────────────────────────────
+DEFAULT_BRANCH="main"
+
 # ── Argument parsing ────────────────────────────────────────────────────────────
 JIRA_TICKET="${1:-}"
 
@@ -165,7 +168,7 @@ echo "Starting Claude automation workflow..."
 echo ""
 
 claude \
-    --dangerouslySkipPermissions \
+    --dangerously-skip-permissions \
     -p "$PROMPT"
 
 echo ""
