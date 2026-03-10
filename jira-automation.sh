@@ -21,27 +21,8 @@ if [ -z "$JIRA_TICKET" ]; then
     exit 1
 fi
 
-# ── Precondition checks ─────────────────────────────────────────────────────────
-if ! git rev-parse --git-dir > /dev/null 2>&1; then
-    echo "Error: Must be run from within a git repository."
-    exit 1
-fi
-
-REPO_ROOT=$(git rev-parse --show-toplevel)
-
-# Verify user-level MCP config exists with required servers
-GLOBAL_MCP_CONFIG="${HOME}/.claude.json"
-if [ ! -f "$GLOBAL_MCP_CONFIG" ]; then
-    echo "Error: User Claude config not found at $GLOBAL_MCP_CONFIG"
-    echo "Please configure Jira and Azure DevOps MCP servers via: claude mcp add"
-    exit 1
-fi
-
-if ! command -v claude &> /dev/null; then
-    echo "Error: 'claude' CLI not found. Please install Claude Code."
-    echo "See: https://docs.anthropic.com/en/docs/claude-code"
-    exit 1
-fi
+# ── Precondition checks (shared) ────────────────────────────────────────────────
+source "$(dirname "$0")/lib/preconditions.sh"
 
 # ── Info banner ─────────────────────────────────────────────────────────────────
 echo "=========================================="
@@ -49,6 +30,7 @@ echo " Jira Automation Script"
 echo "=========================================="
 echo " Ticket  : $JIRA_TICKET"
 echo " Repo    : $REPO_ROOT"
+echo " Branch  : $DEFAULT_BRANCH"
 echo " MCP cfg : $GLOBAL_MCP_CONFIG (user settings)"
 echo "=========================================="
 echo ""
@@ -75,10 +57,17 @@ Based on the ticket title, derive a short kebab-case slug (max 5 words, lowercas
 
 Then run:
 \`\`\`
-git -C "$REPO_ROOT" checkout main
-git -C "$REPO_ROOT" pull origin main
+git -C "$REPO_ROOT" checkout ${DEFAULT_BRANCH}
+git -C "$REPO_ROOT" pull origin ${DEFAULT_BRANCH}
 git -C "$REPO_ROOT" checkout -b fix/${JIRA_TICKET}-<short-slug>
 \`\`\`
+
+---
+
+## Step 2.5 — Update Jira Status to EN COURS
+
+Use the Jira MCP tools to transition ticket **${JIRA_TICKET}** to status **"4. EN COURS (W)"**.
+If the transition fails (e.g., not a valid transition from the current status), log a warning but continue.
 
 ---
 
@@ -91,7 +80,7 @@ git -C "$REPO_ROOT" push -u origin fix/${JIRA_TICKET}-<short-slug>
 
 Then use the Azure DevOps MCP to create a Pull Request:
 - **Source branch:** fix/${JIRA_TICKET}-<short-slug>
-- **Target branch:** main
+- **Target branch:** ${DEFAULT_BRANCH}
 - **Title:** [${JIRA_TICKET}] <Jira ticket title>
 - **Description:** Auto-generated from Jira ticket ${JIRA_TICKET}. Analysis and implementation in progress.
 
@@ -132,9 +121,10 @@ Implement the minimal, focused fix:
 - Follow the existing coding style and conventions of the project
 - Commit the changes:
   \`\`\`
-  git -C "$REPO_ROOT" add -p   # stage only relevant changes
+  git -C "$REPO_ROOT" add <list of changed files>   # stage only the files you modified
   git -C "$REPO_ROOT" commit -m "fix(${JIRA_TICKET}): <concise description of the fix>"
   \`\`\`
+  **Important:** Do NOT use \`git add -p\` (interactive mode). Instead, explicitly list the files you changed.
 
 ---
 
