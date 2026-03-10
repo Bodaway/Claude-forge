@@ -139,13 +139,6 @@ Auto-detect the test and build commands from the project (check package.json scr
 
 ---
 
-## Step 6.5 — (Case B only) Update Jira Status to A TESTER EN INTERNE
-
-After all tests and builds pass, use the Jira MCP tools to transition ticket **${JIRA_TICKET}** to status **"5. A TESTER EN INTERNE (W)"**.
-If the transition fails, log a warning but continue to the PR comment step.
-
----
-
 ## Step 7 — Post PR Comment
 
 Add a detailed, professional comment to the Azure DevOps PR (use the PR ID recorded in Step 3) containing:

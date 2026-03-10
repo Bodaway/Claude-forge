@@ -15,7 +15,7 @@ Automates the full workflow from a Jira ticket to a reviewed Azure DevOps PR.
 4. Opens a Pull Request in Azure DevOps
 5. Analyses the codebase to locate the reported issue
 6. **If the problem is unclear or not fixable** — posts a PR comment explaining why and what is missing
-7. **If fixable** — implements the fix, runs tests and build until they pass, updates Jira status to **A TESTER EN INTERNE**, then posts a PR comment summarising the changes
+7. **If fixable** — implements the fix, runs tests and build until they pass, then posts a PR comment summarising the changes
 
 ### Usage
 
