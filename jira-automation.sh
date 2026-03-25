@@ -12,9 +12,6 @@
 
 set -euo pipefail
 
-# ── Configuration ───────────────────────────────────────────────────────────────
-DEFAULT_BRANCH="main"
-
 # ── Argument parsing ────────────────────────────────────────────────────────────
 JIRA_TICKET="${1:-}"
 
@@ -24,8 +21,44 @@ if [ -z "$JIRA_TICKET" ]; then
     exit 1
 fi
 
-# ── Precondition checks (shared) ────────────────────────────────────────────────
-source "$(dirname "$0")/lib/preconditions.sh"
+# ── Precondition checks ─────────────────────────────────────────────────────────
+if ! git rev-parse --git-dir > /dev/null 2>&1; then
+    echo "Error: Must be run from within a git repository."
+    exit 1
+fi
+
+REPO_ROOT=$(git rev-parse --show-toplevel)
+
+detect_default_branch() {
+    local ref
+    ref=$(git symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed 's|refs/remotes/origin/||')
+    if [ -n "$ref" ]; then
+        echo "$ref"
+        return
+    fi
+    if git show-ref --verify --quiet refs/remotes/origin/main 2>/dev/null; then
+        echo "main"
+    elif git show-ref --verify --quiet refs/remotes/origin/master 2>/dev/null; then
+        echo "master"
+    else
+        echo "main"
+    fi
+}
+
+DEFAULT_BRANCH=$(detect_default_branch)
+
+GLOBAL_MCP_CONFIG="${HOME}/.claude.json"
+if [ ! -f "$GLOBAL_MCP_CONFIG" ]; then
+    echo "Error: User Claude config not found at $GLOBAL_MCP_CONFIG"
+    echo "Please configure Jira and Azure DevOps MCP servers via: claude mcp add"
+    exit 1
+fi
+
+if ! command -v claude &> /dev/null; then
+    echo "Error: 'claude' CLI not found. Please install Claude Code."
+    echo "See: https://docs.anthropic.com/en/docs/claude-code"
+    exit 1
+fi
 
 # ── Info banner ─────────────────────────────────────────────────────────────────
 echo "=========================================="
